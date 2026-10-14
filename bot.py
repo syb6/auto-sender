@@ -1,155 +1,275 @@
-from http.client import HTTPSConnection
 import sys
-from json import dumps
-from time import sleep
-from random import choice, random
+import json
+import time
+import random
+import http.client
 
-file = open("info.txt")
-text = file.read().splitlines()
+CONFIG_FILE = "config.json"
+MESSAGES_FILE = "messages.txt"
 
-if len(sys.argv) > 1 and sys.argv[1] == "--setall" and input("Configure bot? (y/n)") == "y":
-    file.close()
-    file = open("info.txt", "w")
-    text = []
-    text.append(input("User agent: "))
-    text.append(input("Discord token: "))
-    text.append(input("Discord channel URL: "))
-    text.append(input("Discord channel ID: "))
-
-    for parameter in text:
-        file.write(parameter + "\n")
-
-    file.close()
-    exit()
-elif len(sys.argv) > 1 and sys.argv[1] == "--setchannel" and input("Set channel? (y/n)") == "y":
-    user_agent = text[0]
-    token = text[1]
-    text = text[0:2]
-    file.close()
-    file = open("info.txt", "w")
-    text.append(input("Discord channel URL: "))
-    text.append(input("Discord channel ID: "))
-    for parameter in text:
-        file.write(parameter + "\n")
-
-    file.close()
-    exit()
-elif len(sys.argv) > 1 and sys.argv[1] == "--setauth" and input("Set authentication? (y/n)") == "y":
-    channelurl = text[2]
-    channelid = text[3]
-    text = text[2:4]
-    file.close()
-    file = open("info.txt", "w")
-    text.insert(0, input("Discord token: "))
-    text.insert(0, input("User agent: "))
-    for parameter in text:
-        file.write(parameter + "\n")
-
-    file.close()
-    exit()
-elif len(sys.argv) > 1 and sys.argv[1] == "--help":
-    print("Showing help for discord-auto-message")
-    print("Usage:")
-    print("  'python3 bot.py'               :  Runs the autotyper. Fill in the messages and wait times.")
-    print("  'python3 bot.py --setall'      :  Configure all settings.")
-    print("  'python3 bot.py --setchannel'  :  Set channel to send message to. Includes Channel ID and Channel URL")
-    print("  'python3 bot.py --setauth'     :  Set authentication. Includes User Token and User Agent")
-    print("  'python3 bot.py --help'        :  Show help")
-    exit()
-
-if len(text) != 4:
-    print(
-        "An error was found inside the user information file. Run the script with the 'Set All' flag ('python3 bot.py --setall') to reconfigure.")
-    exit()
-
-if len(sys.argv) > 1:
-    exit()
-
-header_data = {
-    "content-type": "application/json",
-    "user-agent": text[0],
-    "authorization": text[1],
-    "host": "discordapp.com",
-    "referrer": text[2]
-}
-
-print("Messages will be sent to " + header_data["referrer"] + ".")
-
-
-def get_connection():
-    return HTTPSConnection("discordapp.com", 443)
-
-
-def send_message(conn, channel_id, message_data):
+def load_config():
     try:
-        conn.request("POST", f"/api/v6/channels/{channel_id}/messages", message_data, header_data)
-        resp = conn.getresponse()
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-        if 199 < resp.status < 300:
-            print("Message sent!")
-            pass
+def save_config(config):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
 
-        else:
-            sys.stderr.write(f"Received HTTP {resp.status}: {resp.reason}\n")
-            pass
+def configure_settings(mode="all"):
+    config = load_config()
+    print(f"\n--- Configuration Setup [{mode.upper()}] ---")
+    
+    if mode in ["all", "auth"]:
+        config["token"] = input("Discord Token: ").strip() or config.get("token", "")
+        config["user_agent"] = input("User Agent [Press Enter for default]: ").strip() or config.get(
+            "user_agent", 
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
 
-    except:
-        sys.stderr.write("Failed to send_message\n")
-        for key in header_data:
-            print(key + ": " + header_data[key])
+    if mode in ["all", "channel"]:
+        config["channel_id"] = input("Discord Channel ID: ").strip() or config.get("channel_id", "")
+        config["channel_url"] = input("Discord Channel URL (Referer): ").strip() or config.get("channel_url", "")
 
+    save_config(config)
+    print("Configuration updated successfully!\n")
 
-def main(msg):
-    message_data = {
-        "content": msg,
-        "tts": "false",
-    }
+def get_message_list():
+    try:
+        with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+            if lines:
+                return lines
+    except FileNotFoundError:
+        pass
 
-    send_message(get_connection(), text[3], dumps(message_data))
-
-
-if __name__ == '__main__':
-    ## Change these values to customize the bot
-    messages_list = [
-        "Hello guys!",
-        "How are you?",
-        "I'm good, thanks!",
-        "I'm doing well!",
-        "What a lovely day!",
-        "I'm doing well, thanks for asking :D",
-        "Ahh this project has a lot of potential!",
-        "I'm glad to be here!",
-        "hmmm",
-        "I'm not sure about that...",
-        "I'm not sure about that one chief...",
-        "This is a good name for a project",
-        "It could be better...",
-        "Ahh, I see what you mean ",
-        "lolz this server gained a lot of followers in short time",
-        "that means we are on a rocket to the moon!",
+    openers = [
+        "yo", "gm", "wait lowkey", "ngl", "real talk", "no way", "i swear",
+        "honest reaction:", "quick question", "bro", "ok but", "bruh", "fun fact:",
+        "chat is this real", "hear me out", "on god", "nah cause why", "not to be dramatic but",
+        "deadass", "lowkey though", "wait hold up", "no cap", "i'm not gonna lie",
+        "okay hear me out", "literally", "bruh moment:", "highkey", "can we talk about how",
+        "wait a second", "valid question:", "bro think about it", "not gonna lie chat",
+        "fr though", "wait actually", "side note:"
     ]
 
-    num_messages = int(input("Amount of messages: "))
-    main_wait = int(input("Seconds between messages: "))
-    human_margin = int(input("Human error margin: "))
+    thoughts = [
+        "this update goes crazy hard",
+        "the dev team is actually cooking right now",
+        "we are so back",
+        "this build is pure aura no cap",
+        "i'm fully locked in today",
+        "the repo is looking absolutely mental",
+        "who let them cook because this is straight fire",
+        "caffeine kicked in and now i'm in flow state",
+        "just pushed a flawless fix to my branch",
+        "the performance optimization is wild",
+        "the UI redesign feels buttery smooth",
+        "this feature is peak software engineering",
+        "we really bypassed all bugs today",
+        "the architecture on this project is insane",
+        "my code compiled first try without errors",
+        "this refactor saved the entire codebase",
+        "the latency dropped so much it's crazy",
+        "this logic is insanely clean",
+        "typing code at lightspeed rn",
+        "everything is running smooth as butter",
+        "this implementation is unmatched",
+        "the response time is ridiculously fast",
+        "we solved the biggest bottleneck today",
+        "the code quality here is next level",
+        "this hotfix fixed literally everything"
+    ]
+
+    reactions = [
+        "fr fr 💯", "i'm dead 💀", "w dev team 🔥", "huge W", 
+        "i'm crying 😭", "valid asf", "say less 🙏", "let's gooo 🚀",
+        "speechless ngl", "absolute cinema 🎬", "10/10 no notes", "zero miss",
+        "pure talent", "unreal stuff", "top tier", "legendary behavior",
+        "blessed my timeline", "w in the chat", "mind blown 🤯", "aura unmatched ✨",
+        "chef kiss 🤌", "sending vibes", "pure gold"
+    ]
+
+    # Generates 300 unique randomized Gen-Z combinations
+    dynamic_messages = [
+        f"{random.choice(openers)} {random.choice(thoughts)} {random.choice(reactions)}"
+        for _ in range(300)
+    ]
+
+    static_messages = [
+        "real and true 💯",
+        "big W for the squad honestly",
+        "bro is actually cooking 🧑‍🍳",
+        "we're making it out of the debug terminal with this one 🚀",
+        "i'm so locked in rn",
+        "valid point ngl",
+        "lowkey best update so far",
+        "never let them know your next commit 🤫",
+        "anyone else testing the new build?",
+        "catching up on chat, pure vibes",
+        "brb getting more caffeine ☕",
+        "looks clean to me 👍",
+        "same here honestly",
+        "fair enough",
+        "it's giving main character energy",
+        "bro got infinite aura for this fix",
+        "this is peak content right here",
+        "absolute masterclass",
+        "w mentality honestly",
+        "living for this feature update",
+        "certified hood classic",
+        "bro understood the assignment 🫡",
+        "no fluff just pure efficiency",
+        "we take those Ws",
+        "seamless execution as always",
+        "hard work paying off fr"
+    ]
+
+    return list(set(dynamic_messages + static_messages))
+
+def add_human_variance(text):
+    """Applies subtle natural human behavior adjustments."""
+    rand = random.random()
+    if rand < 0.12:
+        return text.lower()
+    elif rand < 0.20:
+        return text.rstrip(".!?")
+    elif rand < 0.25 and len(text) > 8: # Subtle character repetition (e.g., "sooo")
+        words = text.split()
+        idx = random.randint(0, len(words) - 1)
+        if len(words[idx]) > 3:
+            words[idx] = words[idx][:-1] + (words[idx][-1] * random.randint(2, 3))
+        return " ".join(words)
+    return text
+
+def trigger_typing_indicator(conn, headers, channel_id):
+    """Triggers the typing status on Discord."""
+    try:
+        conn.request("POST", f"/api/v10/channels/{channel_id}/typing", "{}", headers)
+        resp = conn.getresponse()
+        resp.read() # Flush response body
+    except Exception:
+        pass
+
+def send_message(conn, headers, channel_id, message_text):
+    payload = json.dumps({"content": message_text, "tts": False})
+    
+    try:
+        conn.request("POST", f"/api/v10/channels/{channel_id}/messages", payload, headers)
+        resp = conn.getresponse()
+        resp_data = resp.read().decode('utf-8')
+
+        if 200 <= resp.status < 300:
+            print(f"[SUCCESS] Sent: \"{message_text}\"")
+            return True, conn
+        elif resp.status == 429:
+            try:
+                rate_data = json.loads(resp_data)
+                retry_after = float(rate_data.get("retry_after", 5.0))
+            except (json.JSONDecodeError, ValueError):
+                retry_after = 5.0
+            print(f"[RATE LIMITED] Pausing execution for {retry_after:.2f}s...")
+            time.sleep(retry_after)
+            return send_message(conn, headers, channel_id, message_text)
+        else:
+            print(f"[HTTP ERROR {resp.status}] {resp.reason}: {resp_data}")
+            return False, conn
+    except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError):
+        print("[NETWORK WARNING] Connection dropped. Re-establishing socket...")
+        new_conn = http.client.HTTPSConnection("discord.com", 443)
+        return send_message(new_conn, headers, channel_id, message_text)
+    except Exception as e:
+        print(f"[ERROR] Request failed: {e}")
+        return False, conn
+
+def main():
+    if len(sys.argv) > 1:
+        flag = sys.argv[1].lower()
+        if flag == "--config":
+            configure_settings("all")
+            sys.exit()
+        elif flag == "--setchannel":
+            configure_settings("channel")
+            sys.exit()
+        elif flag == "--setauth":
+            configure_settings("auth")
+            sys.exit()
+
+    config = load_config()
+
+    if not config.get("token") or not config.get("channel_id"):
+        print("Missing required configuration settings.")
+        configure_settings("all")
+        config = load_config()
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": config.get("user_agent", "Mozilla/5.0"),
+        "Authorization": config["token"],
+        "Host": "discord.com",
+        "Referer": config.get("channel_url", "")
+    }
+
+    print("=================================")
+    print(f"Target Channel ID: {config['channel_id']}")
+    print("=================================\n")
+
+    print("Select Message Mode:")
+    print("  1. Single Custom Message (Repeats)")
+    print("  2. Random Message Selection")
+    print("  3. Sequential Message Selection")
+    mode = input("Choice (1/2/3): ").strip()
+
+    if mode == "1":
+        messages = [input("Enter the message text: ")]
+    else:
+        messages = get_message_list()
+        print(f"Loaded {len(messages)} template message(s).")
+
+    num_messages = int(input("Total number of messages to send: "))
+    main_wait = float(input("Base delay between messages (seconds, e.g., 2.5): "))
+    human_margin = float(input("Random variance delay (seconds, e.g., 0.5): "))
+    enable_typing = input("Simulate typing indicator before sending? (y/n): ").strip().lower() == "y"
     print()
 
-    sent_messages = set()  # To keep track of sent messages
+    conn = http.client.HTTPSConnection("discord.com", 443)
+    sent_indices = set()
 
-    for i in range(0, num_messages):
-        while True:
-            # Choose a random message from the messages_list that hasn't been sent
-            random_message = choice(messages_list)
-            if random_message not in sent_messages:
-                sent_messages.add(random_message)
-                break
+    try:
+        for i in range(1, num_messages + 1):
+            if mode == "1":
+                raw_msg = messages[0]
+            elif mode == "3":
+                raw_msg = messages[(i - 1) % len(messages)]
+            else:
+                if len(sent_indices) >= len(messages):
+                    sent_indices.clear()
+                available = [m for idx, m in enumerate(messages) if idx not in sent_indices]
+                raw_msg = random.choice(available)
+                sent_indices.add(messages.index(raw_msg))
 
-        main(random_message)
-        print(
-            "Estimated time to complete: " + str(
-                (num_messages - i) * (human_margin // 2 + main_wait) // 60) + " minutes.")
-        print("Iteration " + str(i) + " complete.\n")
-        sleep(main_wait)
-        sleep(random() * human_margin)
+            msg_to_send = add_human_variance(raw_msg)
 
-    print("Session complete! " + str(num_messages) + " messages sent.")
+            if enable_typing:
+                trigger_typing_indicator(conn, headers, config["channel_id"])
+                time.sleep(random.uniform(0.8, 1.8)) # Typing duration delay
+
+            print(f"[{i}/{num_messages}] Sending...")
+            success, conn = send_message(conn, headers, config["channel_id"], msg_to_send)
+
+            if i < num_messages:
+                delay = main_wait + (random.random() * human_margin)
+                print(f"Waiting {delay:.2f}s...\n")
+                time.sleep(delay)
+
+    except KeyboardInterrupt:
+        print("\n\n[CANCELLED] Script execution stopped by user.")
+    finally:
+        conn.close()
+
+    print(f"\nExecution finished. {num_messages} message attempt(s) processed.")
+
+if __name__ == "__main__":
+    main()
