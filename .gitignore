@@ -1,0 +1,23 @@
+# Secrets / credentials — never commit these
+config.json
+*.token
+.env
+
+# User data
+messages.txt
+info.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/

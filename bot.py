@@ -1,11 +1,41 @@
 import sys
+import os
 import json
 import time
 import random
+import getpass
 import http.client
 
 CONFIG_FILE = "config.json"
 MESSAGES_FILE = "messages.txt"
+TOKEN_ENV_VAR = "DISCORD_TOKEN"
+ENV_FILE = ".env"
+
+def load_env_file(path=ENV_FILE):
+    """Load KEY=VALUE pairs from a .env file into os.environ.
+    Existing environment variables are never overridden. Lines starting
+    with # are comments. Values may be quoted with single or double quotes."""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+def resolve_token(config):
+    """Resolve the token: environment variable first, stored config as fallback.
+    Avoids keeping the secret in a plaintext file when DISCORD_TOKEN is set."""
+    env_token = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if env_token:
+        return env_token
+    return config.get("token", "")
 
 def load_config():
     try:
@@ -23,7 +53,10 @@ def configure_settings(mode="all"):
     print(f"\n--- Configuration Setup [{mode.upper()}] ---")
     
     if mode in ["all", "auth"]:
-        config["token"] = input("Discord Token: ").strip() or config.get("token", "")
+        print(f"(Tip: set the {TOKEN_ENV_VAR} environment variable instead of storing it in {CONFIG_FILE})")
+        entered = getpass.getpass("Discord Token [Press Enter to keep current]: ").strip()
+        if entered:
+            config["token"] = entered
         config["user_agent"] = input("User Agent [Press Enter for default]: ").strip() or config.get(
             "user_agent", 
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -185,6 +218,8 @@ def send_message(conn, headers, channel_id, message_text):
         return False, conn
 
 def main():
+    load_env_file()
+
     if len(sys.argv) > 1:
         flag = sys.argv[1].lower()
         if flag == "--config":
@@ -199,15 +234,20 @@ def main():
 
     config = load_config()
 
-    if not config.get("token") or not config.get("channel_id"):
+    if not resolve_token(config) or not config.get("channel_id"):
         print("Missing required configuration settings.")
         configure_settings("all")
         config = load_config()
 
+    token = resolve_token(config)
+    if not token:
+        print(f"No token found. Set the {TOKEN_ENV_VAR} environment variable or run `python bot.py --setauth`.")
+        sys.exit(1)
+
     headers = {
         "Content-Type": "application/json",
         "User-Agent": config.get("user_agent", "Mozilla/5.0"),
-        "Authorization": config["token"],
+        "Authorization": token,
         "Host": "discord.com",
         "Referer": config.get("channel_url", "")
     }
