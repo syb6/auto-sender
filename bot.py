@@ -11,6 +11,16 @@ MESSAGES_FILE = "messages.txt"
 TOKEN_ENV_VAR = "DISCORD_TOKEN"
 ENV_FILE = ".env"
 
+# Windows consoles often default to cp1252, which cannot encode emoji or
+#unicode names and would crash output mid-run (even misreporting sends as
+# failures). Force UTF-8 with replacement on both streams.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def load_env_file(path=ENV_FILE):
     """Load KEY=VALUE pairs from a .env file into os.environ.
     Existing environment variables are never overridden. Lines starting
@@ -217,6 +227,111 @@ def send_message(conn, headers, channel_id, message_text):
         print(f"[ERROR] Request failed: {e}")
         return False, conn
 
+def build_headers(config, token):
+    return {
+        "Content-Type": "application/json",
+        "User-Agent": config.get("user_agent", "Mozilla/5.0"),
+        "Authorization": token,
+        "Host": "discord.com",
+        "Referer": config.get("channel_url", "")
+    }
+
+def show_help():
+    print("Usage: python bot.py [subcommand]")
+    print("Subcommands:")
+    print("  (none)           Run the bot interactively.")
+    print("  --config         Configure all settings (token hidden as you type).")
+    print("  --setauth        Update token and user agent only.")
+    print("  --setchannel     Update channel ID and URL only.")
+    print("  --check          Validate the token and target channel (GET-only, sends nothing).")
+    print("  --peek           Show the latest channel messages, read-only (sends nothing).")
+    print("  --dry-run        Preview generated messages without any network request.")
+    print("  --help           Show this help.")
+
+def check_setup(config):
+    """GET-only validation of the token and target channel. Sends nothing."""
+    token = resolve_token(config)
+    if not token:
+        print(f"[FAIL] No token found. Set {TOKEN_ENV_VAR} or run `python bot.py --setauth`.")
+        return False
+    headers = build_headers(config, token)
+    ok = True
+    conn = http.client.HTTPSConnection("discord.com", 443)
+    try:
+        conn.request("GET", "/api/v10/users/@me", None, headers)
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", "replace")
+        if resp.status == 200:
+            user = json.loads(body)
+            print(f"[OK] Token valid - authenticated as '{user.get('username')}' (id {user.get('id')})")
+        else:
+            ok = False
+            print(f"[FAIL] Token check: HTTP {resp.status} {resp.reason}. Token may be invalid or expired.")
+
+        channel_id = config.get("channel_id", "")
+        if not channel_id:
+            print("[WARN] No channel_id configured.")
+            ok = False
+        else:
+            conn.request("GET", f"/api/v10/channels/{channel_id}", None, headers)
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            if resp.status == 200:
+                ch = json.loads(body)
+                print(f"[OK] Channel reachable - #{ch.get('name')} (type {ch.get('type')}, guild {ch.get('guild_id')})")
+            else:
+                ok = False
+                print(f"[FAIL] Channel check: HTTP {resp.status} {resp.reason}.")
+    finally:
+        conn.close()
+    return ok
+
+def peek_channel(config, limit=20):
+    """Read-only listing of the latest channel messages. Sends nothing."""
+    token = resolve_token(config)
+    if not token:
+        print(f"[FAIL] No token found. Set {TOKEN_ENV_VAR} or run `python bot.py --setauth`.")
+        return
+    channel_id = config.get("channel_id", "")
+    if not channel_id:
+        print("[FAIL] No channel_id configured. Run `python bot.py --setchannel` first.")
+        return
+    headers = build_headers(config, token)
+    conn = http.client.HTTPSConnection("discord.com", 443)
+    try:
+        conn.request("GET", f"/api/v10/channels/{channel_id}/messages?limit={limit}", None, headers)
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", "replace")
+        if resp.status != 200:
+            print(f"[FAIL] HTTP {resp.status} {resp.reason}: {body[:200]}")
+            return
+        rows = json.loads(body)
+        print(f"--- Latest {len(rows)} message(s), read-only view ---")
+        for m in reversed(rows):
+            author = (m.get("author") or {}).get("username", "?")
+            stamp = (m.get("timestamp") or "").replace("T", " ")[:19]
+            content = (m.get("content") or "").replace("\n", " ")
+            if len(content) > 80:
+                content = content[:77] + "..."
+            print(f"{stamp}  @{author}: {content}")
+        print(f"--- End of view. Nothing was sent. ---")
+    finally:
+        conn.close()
+
+def dry_run():
+    """Preview what would be sent - performs no network requests at all."""
+    messages = get_message_list()
+    try:
+        entered = input("How many messages to preview [default 10]: ").strip()
+        num = int(entered) if entered else 10
+    except ValueError:
+        num = 10
+    num = max(1, min(num, len(messages), 50))
+    print(f"--- DRY RUN: previewing {num} message(s). Nothing will be sent. ---")
+    for i, raw in enumerate(random.sample(messages, num), 1):
+        print(f"[{i}] {add_human_variance(raw)}")
+    print("--- Preview complete. No messages were sent. ---")
+
 def main():
     load_env_file()
 
@@ -231,6 +346,18 @@ def main():
         elif flag == "--setauth":
             configure_settings("auth")
             sys.exit()
+        elif flag in ("--help", "-h"):
+            show_help()
+            sys.exit()
+        elif flag == "--check":
+            print("Running check (GET-only, sends nothing)...")
+            sys.exit(0 if check_setup(load_config()) else 1)
+        elif flag == "--peek":
+            peek_channel(load_config())
+            sys.exit()
+        elif flag == "--dry-run":
+            dry_run()
+            sys.exit()
 
     config = load_config()
 
@@ -244,13 +371,7 @@ def main():
         print(f"No token found. Set the {TOKEN_ENV_VAR} environment variable or run `python bot.py --setauth`.")
         sys.exit(1)
 
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": config.get("user_agent", "Mozilla/5.0"),
-        "Authorization": token,
-        "Host": "discord.com",
-        "Referer": config.get("channel_url", "")
-    }
+    headers = build_headers(config, token)
 
     print("=================================")
     print(f"Target Channel ID: {config['channel_id']}")
@@ -272,6 +393,13 @@ def main():
     main_wait = float(input("Base delay between messages (seconds, e.g., 2.5): "))
     human_margin = float(input("Random variance delay (seconds, e.g., 0.5): "))
     enable_typing = input("Simulate typing indicator before sending? (y/n): ").strip().lower() == "y"
+
+    if main_wait < 0.5:
+        print("[STOP] A sub-half-second delay between messages is the fastest route to rate limits and account flags.")
+        if input("Proceed anyway? (y/n): ").strip().lower() != "y":
+            print("Cancelled. Raise the base delay and run again.")
+            sys.exit(0)
+
     print()
 
     conn = http.client.HTTPSConnection("discord.com", 443)

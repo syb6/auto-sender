@@ -41,6 +41,15 @@ Subcommands:
 | `python bot.py --config`     | Configure all settings.                        |
 | `python bot.py --setauth`    | Update the token and user agent only.          |
 | `python bot.py --setchannel` | Update the channel ID and URL only.            |
+| `python bot.py --check`      | Validate the token and target channel (GET-only, sends nothing). |
+| `python bot.py --peek`       | Show the latest channel messages (read-only).  |
+| `python bot.py --dry-run`    | Preview generated messages (no network access).|
+| `python bot.py --help`       | Show help.                                     |
+
+> **Good practice:** run `python bot.py --check` first. It verifies the token
+> and channel with read-only requests before anything is sent. Delays under
+> half a second trigger a confirmation warning because they are the fastest
+> route to rate limits and account flags.
 
 ---
 
